@@ -2,57 +2,44 @@ name: Trae签到 & DeepSeek余额监控
 on:
   schedule:
     - cron: '0 0 * * *'
-  workflow_dispatch: # 支持手动点运行测试
+  workflow_dispatch:
 
 jobs:
-  run:
+  task:
     runs-on: ubuntu-latest
     steps:
-      - name: 安装依赖
-        run: |
-          apt update
-          apt install -y jq curl
-      - name: Trae签到
+      - name: Install curl & jq
+        run: sudo apt update && sudo apt install -y curl jq
+
+      - name: Trae Checkin
         id: trae
         run: |
           TRAE_RT="${{ secrets.TRAE_REFRESH_TOKEN }}"
           DEVICE_ID="${{ secrets.TRAE_DEVICE_ID }}"
-          # 获取access_token
           token_resp=$(curl -s -X POST "https://api.trae.ai/auth/refresh" \
             -H "Content-Type: application/json" \
-            -d "{\"refresh_token\":\"$TRAE_RT\",\"device_id\":\"$DEVICE_ID\"}")
-          access_token=$(echo $token_resp | jq -r '.access_token')
-          if [[ "$access_token" == "null" ]]; then
-            trae_msg="Trae刷新token失败"
+            -d "{\"refresh_token\":\"${TRAE_RT}\",\"device_id\":\"${DEVICE_ID}\"}")
+          access_token=$(echo "$token_resp" | jq -r '.access_token')
+          if [ "$access_token" = "null" ] || [ -z "$access_token" ];then
+            MSG_TRAE="❌ Trae刷新Token失败"
           else
-            checkin_resp=$(curl -s -X POST "https://api.trae.ai/user/checkin" \
-              -H "Authorization: Bearer $access_token" \
-              -H "Content-Type: application/json")
-            trae_msg="$checkin_resp"
+            ck=$(curl -s -X POST "https://api.trae.ai/user/checkin" -H "Authorization: Bearer ${access_token}")
+            MSG_TRAE="✅ 签到结果：$ck"
           fi
-          echo "TRAE_MSG<<EOF" >> $GITHUB_ENV
-          echo "$trae_msg" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
-      - name: DeepSeek余额查询
+          echo "MSG_TRAE=$MSG_TRAE" >> $GITHUB_OUTPUT
+
+      - name: DeepSeek Balance
         id: ds
         run: |
           DS_KEY="${{ secrets.DEEPSEEK_API_KEY }}"
-          balance_resp=$(curl -s "https://api.deepseek.com/user/balance" \
-            -H "Authorization: Bearer $DS_KEY")
-          echo "DS_MSG<<EOF" >> $GITHUB_ENV
-          echo "$balance_resp" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
-      - name: PushPlus推送
+          res=$(curl -s "https://api.deepseek.com/user/balance" -H "Authorization: Bearer ${DS_KEY}")
+          echo "MSG_DS=余额信息：$res" >> $GITHUB_OUTPUT
+
+      - name: PushPlus Notify
         run: |
           PUSH_TOKEN="${{ secrets.PUSHPLUS_TOKEN }}"
-          title="Trae签到+DeepSeek余额通知"
-          content="
-【Trae签到结果】
-${{ env.TRAE_MSG }}
-
-【DeepSeek余额】
-${{ env.DS_MSG }}
-          "
+          TITLE="Trae签到+DeepSeek余额通知"
+          CONTENT="${{ steps.trae.outputs.MSG_TRAE }} \n\n ${{ steps.ds.outputs.MSG_DS }}"
           curl -s -X POST "http://www.pushplus.plus/send" \
-            -H "Content-Type: application/json" \
-            -d "{\"token\":\"$PUSH_TOKEN\",\"title\":\"$title\",\"content\":\"$content\"}"
+          -H "Content-Type: application/json" \
+          -d "{\"token\":\"${PUSH_TOKEN}\",\"title\":\"${TITLE}\",\"content\":\"${CONTENT}\"}"
